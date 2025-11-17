@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P対戦オセロ (手動接続)</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f4f4f4; color: #333; }
+        h1 { color: #1a1a1a; }
+        #game-wrapper { max-width: 900px; width: 100%; }
+        .hidden { display: none !important; }
+
+        /* Setup Area */
+        .setup-container { background-color: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin-bottom: 20px; text-align: center; }
+        .setup-container h2 { margin-top: 0; }
+        .setup-container p { color: #666; }
+        .setup-container textarea { width: 95%; height: 100px; margin: 10px 0; font-family: monospace; font-size: 12px; }
+        button { padding: 12px 20px; margin: 5px; border-radius: 5px; border: none; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; transition: background-color 0.3s; }
+        button:hover { background-color: #0056b3; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #5a6268; }
+
+        /* Game Area */
+        #game-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; }
+        #board-container { display: grid; grid-template-columns: repeat(8, 50px); grid-template-rows: repeat(8, 50px); width: 400px; height: 400px; background-color: #008000; border: 2px solid #333; box-shadow: 5px 5px 15px rgba(0,0,0,0.3); }
+        .cell { width: 50px; height: 50px; border: 1px solid #006000; box-sizing: border-box; display: flex; justify-content: center; align-items: center; cursor: pointer; }
+        .disc { width: 80%; height: 80%; border-radius: 50%; box-shadow: 2px 2px 5px rgba(0,0,0,0.4); }
+        .black { background-color: #000; }
+        .white { background-color: #fff; }
+        .hint { background-color: rgba(255, 255, 0, 0.3); border-radius: 50%; width: 60%; height: 60%; }
+        #game-info { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; width: 300px; height: fit-content; }
+        #message { margin-top: 15px; font-size: 1.2em; font-weight: bold; min-height: 2em; }
+        .score-board { display: flex; justify-content: space-around; margin-top: 15px; font-size: 1.5em; }
+        .turn-indicator { border: 4px solid gold; border-radius: 8px; padding: 5px; }
+    </style>
+</head>
+<body>
+
+    <h1>P2P対戦オセロ (手動接続)</h1>
+
+    <div id="game-wrapper">
+        <!-- Step 1: Initial Choice -->
+        <div id="initial-choice" class="setup-container">
+            <h2>対戦を始めますか？</h2>
+            <p>最初にゲームを始める人が「ゲームを作成」を押してください。</p>
+            <button id="create-btn">ゲームを作成 (あなたは黒)</button>
+            <button id="join-btn">ゲームに参加 (あなたは白)</button>
+        </div>
+
+        <!-- Step 2: Host Creates Offer -->
+        <div id="host-area" class="setup-container hidden">
+            <h2>ステップ1: オファーコードの送信</h2>
+            <p>下のコードを全てコピーして、対戦相手に送ってください。</p>
+            <textarea id="offer-sdp" readonly></textarea>
+            <button onclick="copyText('offer-sdp')">コピー</button>
+            <hr>
+            <h2>ステップ3: アンサーコードで接続</h2>
+            <p>相手から送られてきたコードをここに貼り付けて、「接続」を押してください。</p>
+            <textarea id="answer-sdp-input" placeholder="相手からのアンサーコードをここに貼り付け"></textarea>
+            <button id="connect-btn">接続を完了</button>
+        </div>
+
+        <!-- Step 2: Guest Creates Answer -->
+        <div id="guest-area" class="setup-container hidden">
+            <h2>ステップ2: アンサーコードの作成</h2>
+            <p>相手から送られてきたコードをここに貼り付けて、「アンサーを作成」を押してください。</p>
+            <textarea id="offer-sdp-input" placeholder="相手からのオファーコードをここに貼り付け"></textarea>
+            <button id="create-answer-btn">アンサーを作成</button>
+            <hr>
+            <p>生成された下のコードを全てコピーして、相手に送り返してください。</p>
+            <textarea id="answer-sdp" readonly></textarea>
+            <button onclick="copyText('answer-sdp')">コピー</button>
+        </div>
+
+        <!-- Game Board and Info -->
+        <div id="game-container" class="hidden">
+            <div id="board-container"></div>
+            <div id="game-info">
+                <h2>ゲーム情報</h2>
+                <p>あなたの色: <strong id="player-color"></strong></p>
+                <div id="message"></div>
+                <div class="score-board">
+                    <div id="score-black">黒: 2</div>
+                    <div id="score-white">白: 2</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const initialChoiceDiv = document.getElementById('initial-choice');
+        const hostAreaDiv = document.getElementById('host-area');
+        const guestAreaDiv = document.getElementById('guest-area');
+        const gameContainerDiv = document.getElementById('game-container');
+        const boardContainer = document.getElementById('board-container');
+        const messageEl = document.getElementById('message');
+        const scoreBlackEl = document.getElementById('score-black');
+        const scoreWhiteEl = document.getElementById('score-white');
+        const playerColorEl = document.getElementById('player-color');
+
+        // Game Constants
+        const BOARD_SIZE = 8;
+        const EMPTY = 0;
+        const BLACK = 1;
+        const WHITE = 2;
+
+        // Game State
+        let board = [];
+        let currentPlayer = BLACK;
+        let myColor = null;
+        let gameOver = false;
+
+        // WebRTC variables
+        let peerConnection;
+        let dataChannel;
+        const rtcConfig = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
+
+        // --- UI Handling ---
+        document.getElementById('create-btn').addEventListener('click', startHost);
+        document.getElementById('join-btn').addEventListener('click', startGuest);
+        document.getElementById('create-answer-btn').addEventListener('click', createAnswer);
+        document.getElementById('connect-btn').addEventListener('click', connectToGuest);
+        
+        function startHost() {
+            myColor = BLACK;
+            initialChoiceDiv.classList.add('hidden');
+            hostAreaDiv.classList.remove('hidden');
+            createPeerConnection();
+            dataChannel = peerConnection.createDataChannel('game');
+            setupDataChannel();
+            
+            peerConnection.createOffer()
+                .then(offer => peerConnection.setLocalDescription(offer))
+                .catch(e => console.error("Offer creation failed:", e));
+        }
+
+        function startGuest() {
+            myColor = WHITE;
+            initialChoiceDiv.classList.add('hidden');
+            guestAreaDiv.classList.remove('hidden');
+        }
+
+        function createAnswer() {
+            const offerSdp = document.getElementById('offer-sdp-input').value;
+            if (!offerSdp) {
+                alert("オファーコードを入力してください。");
+                return;
+            }
+            createPeerConnection();
+            peerConnection.ondatachannel = event => {
+                dataChannel = event.channel;
+                setupDataChannel();
+            };
+
+            peerConnection.setRemoteDescription({ type: 'offer', sdp: offerSdp })
+                .then(() => peerConnection.createAnswer())
+                .then(answer => peerConnection.setLocalDescription(answer))
+                .catch(e => console.error("Answer creation failed:", e));
+        }
+        
+        function connectToGuest() {
+             const answerSdp = document.getElementById('answer-sdp-input').value;
+             if (!answerSdp) {
+                alert("アンサーコードを入力してください。");
+                return;
+            }
+            peerConnection.setRemoteDescription({ type: 'answer', sdp: answerSdp })
+               .catch(e => console.error("Set remote description failed:", e));
+        }
+
+        function copyText(elementId) {
+            const textArea = document.getElementById(elementId);
+            textArea.select();
+            document.execCommand('copy');
+            alert('コピーしました！');
+        }
+
+        // --- WebRTC Core ---
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+            peerConnection.onicecandidate = event => {
+                // Trickle ICE is complex for manual exchange. 
+                // We'll wait for all candidates to be gathered.
+                if (event.candidate === null) {
+                     // Display the SDP with all ICE candidates gathered.
+                    if (peerConnection.localDescription.type === 'offer') {
+                        document.getElementById('offer-sdp').value = peerConnection.localDescription.sdp;
+                    } else if (peerConnection.localDescription.type === 'answer') {
+                        document.getElementById('answer-sdp').value = peerConnection.localDescription.sdp;
+                    }
+                }
+            };
+        }
+
+        function setupDataChannel() {
+            dataChannel.onopen = () => {
+                console.log("Data channel is open!");
+                hostAreaDiv.classList.add('hidden');
+                guestAreaDiv.classList.add('hidden');
+                gameContainerDiv.classList.remove('hidden');
+                initializeGame();
+            };
+            dataChannel.onclose = () => {
+                console.log("Data channel is closed.");
+                messageEl.textContent = "接続が切れました。";
+            };
+            dataChannel.onmessage = event => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'move') {
+                    board = placeDiscAndFlip(board, data.row, data.col, currentPlayer);
+                    switchTurn();
+                    renderBoard();
+                } else if (data.type === 'pass') {
+                    switchTurn();
+                    messageEl.textContent = (currentPlayer === BLACK ? "白" : "黒") + "がパスしました。あなたの番です。";
+                    renderBoard();
+                }
+            };
+        }
+
+        // --- Game Logic ---
+        function initializeGame() {
+            board = Array(BOARD_SIZE).fill(0).map(() => Array(BOARD_SIZE).fill(EMPTY));
+            board[3][3] = WHITE;
+            board[3][4] = BLACK;
+            board[4][3] = BLACK;
+            board[4][4] = WHITE;
+            currentPlayer = BLACK;
+            gameOver = false;
+            playerColorEl.textContent = myColor === BLACK ? '黒' : '白';
+            renderBoard();
+        }
+
+        function switchTurn() {
+            currentPlayer = (currentPlayer === BLACK) ? WHITE : BLACK;
+        }
+
+        function renderBoard() {
+            boardContainer.innerHTML = '';
+            const validMoves = getValidMoves(board, currentPlayer);
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('cell');
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+
+                    const disc = board[r][c];
+                    if (disc !== EMPTY) {
+                        const discEl = document.createElement('div');
+                        discEl.classList.add('disc', disc === BLACK ? 'black' : 'white');
+                        cell.appendChild(discEl);
+                    } else if (currentPlayer === myColor && validMoves.some(move => move.row === r && move.col === c)) {
+                        const hintEl = document.createElement('div');
+                        hintEl.classList.add('hint');
+                        cell.appendChild(hintEl);
+                        cell.addEventListener('click', handleCellClick);
+                    }
+                    boardContainer.appendChild(cell);
+                }
+            }
+            updateGameInfo();
+            checkGameOver();
+        }
+        
+        function handleCellClick(event) {
+            if (currentPlayer !== myColor || gameOver) return;
+            
+            const row = parseInt(event.currentTarget.dataset.row);
+            const col = parseInt(event.currentTarget.dataset.col);
+
+            board = placeDiscAndFlip(board, row, col, myColor);
+            dataChannel.send(JSON.stringify({ type: 'move', row, col }));
+            
+            switchTurn();
+            renderBoard();
+
+            // Check if the opponent can move. If not, pass.
+            if (!gameOver && getValidMoves(board, currentPlayer).length === 0) {
+                 messageEl.textContent = "相手はパスしました。もう一度あなたの番です。";
+                 dataChannel.send(JSON.stringify({ type: 'pass' }));
+                 switchTurn(); // Pass turn back to me
+                 renderBoard();
+            }
+        }
+
+        function updateGameInfo() {
+            const scores = calculateScore(board);
+            scoreBlackEl.textContent = `黒: ${scores.black}`;
+            scoreWhiteEl.textContent = `白: ${scores.white}`;
+
+            scoreBlackEl.classList.remove('turn-indicator');
+            scoreWhiteEl.classList.remove('turn-indicator');
+            if (currentPlayer === BLACK) scoreBlackEl.classList.add('turn-indicator');
+            else scoreWhiteEl.classList.add('turn-indicator');
+
+            if (gameOver) {
+                if (scores.black > scores.white) messageEl.textContent = '黒の勝ちです！';
+                else if (scores.white > scores.black) messageEl.textContent = '白の勝ちです！';
+                else messageEl.textContent = '引き分けです！';
+            } else if (currentPlayer === myColor) {
+                messageEl.textContent = 'あなたの番です';
+            } else {
+                messageEl.textContent = '相手の番です...';
+            }
+        }
+
+        function checkGameOver() {
+            const playerMoves = getValidMoves(board, currentPlayer).length;
+            const opponentMoves = getValidMoves(board, currentPlayer === BLACK ? WHITE : BLACK).length;
+            if (playerMoves === 0 && opponentMoves === 0) {
+                gameOver = true;
+                updateGameInfo();
+            }
+        }
+        
+        function calculateScore(board) {
+            return board.flat().reduce((scores, cell) => {
+                if (cell === BLACK) scores.black++;
+                if (cell === WHITE) scores.white++;
+                return scores;
+            }, { black: 0, white: 0 });
+        }
+
+        function getValidMoves(board, color) {
+            const moves = [];
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    if (board[r][c] === EMPTY && isValidMove(board, r, c, color)) {
+                        moves.push({ row: r, col: c });
+                    }
+                }
+            }
+            return moves;
+        }
+
+        function isValidMove(board, row, col, color) {
+            const opponent = color === BLACK ? WHITE : BLACK;
+            const directions = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+            for (const [dr, dc] of directions) {
+                let r = row + dr, c = col + dc;
+                let foundOpponent = false;
+                while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+                    if (board[r][c] === opponent) foundOpponent = true;
+                    else if (board[r][c] === color) { if (foundOpponent) return true; break; }
+                    else break;
+                    r += dr; c += dc;
+                }
+            }
+            return false;
+        }
+
+        function placeDiscAndFlip(board, row, col, color) {
+            const newBoard = board.map(r => [...r]);
+            newBoard[row][col] = color;
+            const opponent = color === BLACK ? WHITE : BLACK;
+            const directions = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+            directions.forEach(([dr, dc]) => {
+                const toFlip = [];
+                let r = row + dr, c = col + dc;
+                while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+                    if (newBoard[r][c] === opponent) toFlip.push({r,c});
+                    else if (newBoard[r][c] === color) { toFlip.forEach(pos => newBoard[pos.r][pos.c] = color); break; }
+                    else break;
+                    r += dr; c += dc;
+                }
+            });
+            return newBoard;
+        }
+    </script>
+</body>
+</html>
